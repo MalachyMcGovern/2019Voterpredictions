@@ -1,0 +1,594 @@
+---
+title: "The Influence Of Population, Voting Turnout and Ethnicity on voting outcomes"
+subtitle: "Final project STAT-312"
+author: "Malachy McGovern"
+date: "20/04/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+
+#   Introduction
+
+
+Politics in recent years has been turbulent to say the least. With the rise of populist politics, American society has become much more polarized where the opposing perspective has become much more unacceptable than years past. This political tension was brought to its pinnacle at the 2020 elections, which had the largest turnout in history. However, one of the main stories in that election was the potential for new swing states to come to light. The state of Georgia for example, was last blue in 1992 and had such a high percentage of democrat votes since 1980. In this case, many have claimed that the increased turnout in voters and voters from minorities was pivotal in these changes. This is at least seen by the Republican party, who since the election, have scrambled to pass stricter voting laws. This would seek to limit turnout especially from those minority groups. 
+
+This raises the theory that increased turnout favors democrats in elections. In this project I seek to test that theory and see the conditions that this may be true for counties and states across the USA. Before this, I will look to identify the political map of America and get a sense of the distribution of votes and turnout for regions of the country. I will also, implement an alternate electoral system which allocates electoral votes by percentage within the state rather than the current winner-takes all system. Finally, I will generate a model to predict the next swing counties and thus swing states using support vector machines. However, this model will rely solely on the factors of raw votes cast, turnout and the percentage distribution of votes. In doing so, I will be putting into practice the aforementioned theory by using turnout and ethnic voting as a predictor.  
+
+
+
+##    Hypotheses
+
+*1   -   Voter turnout and party outcome*
+
+_null:_ There will be no significant relationship between the voter turnout and difference of democrat votes to republican
+_Alternative:_ There will be a significant relationship between voter turnout and difference of democrat votes to republican
+
+*2   -   Ethnicity and party outcome*
+
+null: There will be no significant relationship between the percentage of ethnic minorities and percentage of democrat votes
+Alternative : There will be a significant relationship between the percentage of ethnic minorities and percentage of democrat votes
+
+
+#   Data setup
+In the chunk below I have called various packages from my library which I will use in this project. I have also set the chunks to not produce warnings or messages when knitting or running. 
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, echo = FALSE)
+library(tidyverse)
+library(modelr)
+library(e1071)
+library(usmap)
+library(ggthemes)
+library(knitr)
+```
+
+In the following chunk I have read the .csv file containing all the various statistics surrounding the counties in the USA. From there I have randomly sampled the data to produce a training, querying and testing sample. These files were then written up to form their own individual .csv file. 
+
+
+
+```{r}
+dataset <- read.csv(('ProjectData.csv'))
+
+dataset <- dataset %>% mutate(countyFIPS = as.factor(countyFIPS), 
+                   StateFIPS = as.factor(StateFIPS),
+                   PostalCode=as.factor(PostalCode),
+                   StateName=as.factor(StateName),
+                   County=as.factor(County),
+                   PoliticsGroup= as.factor(PoliticsGroup))
+dataset <- dataset%>% mutate(snum=sample.int(n(),n())/n()) 
+
+training <- dataset %>% filter(snum < 0.6) %>% select(-snum)
+
+query <- dataset %>% filter(snum>= 0.6, snum<0.8) %>% select(-snum)
+
+test <- dataset %>% filter(snum>0.8) %>% select(-snum)
+
+training %>% write_csv(('training.csv'))
+query %>% write_csv(('query.csv'))
+test %>% write_csv(('test.csv'))
+
+```
+
+#   Exploratory analysis 
+
+##    Turnout by county and state
+Here marks the procedure to map the voting distributions around the country. This uses the original data as it is purely an observational stage of the project. Furthermore, by using the training data set there will be a lot of empty counties in the map which will limit the value of the visualization. 
+
+This first map gives a image of the voter turnout for each county across the US.Generally there the turnout seems to range between 40% and 60% across the country. The second plot shows the state level of this variable which verified the previous claim on turnout range.
+
+```{r}
+maps <- dataset %>% mutate(fips = countyFIPS) %>% group_by(StateName) %>%
+  mutate(state_ave_votingPop= mean(votingPop))
+
+plot_usmap(data = maps, regions="counties", values = "votingPop")+
+  scale_fill_viridis_b()+labs(title = "US counties by Voter turnout")
+plot_usmap(data = maps, regions="states", values = "state_ave_votingPop")+
+  scale_fill_viridis_b()+labs(title = "US counties by Voter turnout")
+
+```
+
+##    Statewise voting results
+
+
+In comparison these maps below begin to describe in real and relative terms the differences in voting. The first map gives the difference in percentage votes of republicans against democrats. Here the graph is colored on a scale of red to blue with white marking the 50/50 point, which here is 0. The intensity of the color indicates the strength of win by either party. 
+
+The second graph gives the raw voting difference between the two parties. Here it is not colored by blue or red as it fails to distinguish wins as effectively. What can be observed here is that democrats have extraordinary high votes in certain counties, notably in LA, Chicago and some regions in the east coast. The likelihood here is that these are all urban counties which have the concentrations of people exponentially larger than other counties. Given that these are democrat wins, it may explain why they tend to win the popular vote. 
+
+
+```{r}
+maps <- maps %>% mutate(Party_Percent_diff = gopPercent - demPercent,
+                    Party_vote_diff = votes_gop - votes_dem) 
+
+plot_usmap(data = maps, regions="counties", values = "Party_Percent_diff")+ 
+  scale_fill_gradient2(high = "red", mid = "white", low = "blue", midpoint = 0)+labs(title = "US counties by Party Percent")
+
+plot_usmap(data = maps, regions="counties", values = "Party_vote_diff")+ 
+  scale_fill_gradient2(high = "red", mid = "white", low = "blue", midpoint = 0)+labs(title = "US counties by Party Votes")+scale_fill_viridis_b()
+```
+
+
+In this instance, the map describes these percentage and raw differences by state rather than counties. A similar trend can be observed in the raw voe difference. 
+
+
+```{r}
+statemaps <- dataset %>% group_by(StateName) %>% 
+  mutate(fips = StateFIPS,
+         Party_Percent_diff = gopPercent - demPercent,
+                    Party_vote_diff = votes_gop - votes_dem)
+
+plot_usmap(data = statemaps, regions="states", values = "Party_Percent_diff")+ 
+  scale_fill_gradient2(high = "red", mid = "white", low = "blue", midpoint = 0)+
+  labs(title = "US State by Party Percent")
+
+plot_usmap(data = statemaps, regions="states", values = "Party_vote_diff")+ 
+  scale_fill_gradient2(high = "red", mid = "white", low = "blue", midpoint = 0)+labs(title = "US State by Party Votes")
+
+```
+
+
+#   Winning elections
+
+##    Adding the electoral college variable and a state averages
+
+Below is the start of constructing the number of electoral votes for each party based on results. The chunk below involves the process of adding the number of electoral college votes for each state. 
+
+```{r}
+electoral_votes <- c(Alabama =9 , Arizona = 11,Arkansas = 6,California =55 , Colorado = 9, Connecticut =7 ,Delaware =3,
+                     `District of Colombia` = 3, Florida =29 , Georgia =16 , Hawaii =4 , Idaho =4 , Illinois = 20, Indiana =11 ,
+                     Iowa = 6, Kansas =6 , Kentucky =8 ,Louisiana=8,Maine=4,Maryland=10,Massachusetts=11,Michigan=16,Minnesota=10,
+                     Mississippi=6,Missouri=10,Montana=3,Nebraska=5,Nevada=6,`New Hampshire` =4,`New Jersey`=14,`New Mexico`=5,
+                     `New York`=29,`North Carolina`=15,`North Dakota`=3,Ohio=18,Oklahoma=7,Oregon=7,Pennsylvania=20,`Rhode Island`=4,`South Carolina`=9,`South Dakota`=3,Tennessee=11,Texas=38,Utah=6,Vermont=3,Virginia=13,Washington=12,
+                     `West Virginia` = 5,Wisconsin=10, Wyoming =3 )
+sum(electoral_votes)
+
+electoral_df <- as_tibble(electoral_votes)
+electoral_df <- electoral_df %>% summarize(Electoral_Votes =value)
+
+electoral_df <- dataset %>% select(StateName) %>% distinct() %>% bind_cols(electoral_df)
+
+```
+
+Below I have constructed a new data frame which gives the average voting statistics for each state. This involves the total votes for each party, the percentages for each party and the difference in votes between the two. I have also added variables giving the proportion of the US population of each state. I have then added the electoral votes as a variable and then used it to construct a variable allocating electoral votes by the proportion of the US population each state holds. 
+
+
+
+```{r}
+statevotes <- training %>% 
+  group_by(StateName,PostalCode,StateFIPS) %>%
+  summarize(total_dem = sum(votes_dem),
+            total_gop = sum(votes_gop), 
+            totalvotes = sum(total_votes),
+            state_pop = sum(TOT_POP)) %>% 
+  mutate(vote_difference = total_gop-total_dem,
+         gop_prop = total_gop/totalvotes,
+         dem_prop = total_dem/totalvotes,
+         prop_difference = gop_prop-dem_prop,
+         fips = StateFIPS) %>%
+  ungroup() %>% 
+  mutate(USpop = sum(state_pop)) %>%  
+  full_join(electoral_df, by = "StateName") %>% 
+  group_by(StateName) %>% 
+  mutate(US_prop = state_pop/USpop, 
+         elec_votes_by_pop = US_prop*sum(electoral_votes))
+
+
+
+```
+
+
+I have then used this information to generate the outcomes of an election based on normal electoral votes or the adjusted electoral votes.
+
+
+
+```{r}
+statevotes %>% mutate(result = case_when(
+  vote_difference<0 ~ "DEM",
+  vote_difference>0 ~ "GOP"))%>% 
+  group_by(result) %>% 
+  summarize(Total_elec = sum(elec_votes_by_pop)) %>% 
+  ggplot(aes(result, Total_elec, fill = result))+geom_col()+scale_fill_manual(values = c("blue","red"))
+
+statevotes %>% mutate(result = case_when(
+  vote_difference<0 ~ "DEM",
+  vote_difference>0 ~ "GOP"))%>% 
+  group_by(result) %>% 
+  summarize(Total_elec = sum(Electoral_Votes)) %>% 
+  ggplot(aes(result, Total_elec, fill =result))+geom_col()+scale_fill_manual(values = c("blue","red"))
+
+```
+
+##   Applying the Proportional Electoral Vote system
+
+
+Here electoral votes are allocated fractionally based on the proportion that voted in favor of the party. In this system all parties receive the number of electoral votes proportional to their votes received. 
+
+
+```{r}
+prop_statevotes <- statevotes %>% 
+  select(StateName,fips,PostalCode, Electoral_Votes, gop_prop,dem_prop, totalvotes) %>% 
+  mutate(prop_elec_votes_GOP = Electoral_Votes*gop_prop,
+         prop_elec_votes_DEM = Electoral_Votes*dem_prop,
+         Winner = case_when(
+           (prop_elec_votes_GOP - prop_elec_votes_DEM) <0 ~ "DEM",
+           prop_elec_votes_GOP-prop_elec_votes_DEM >0 ~ "GOP"), 
+         win_type = case_when(
+           dem_prop-0.5 >0.05 ~ "Strong DEM",
+           gop_prop-0.5 >0.05 ~ "Strong GOP",
+           TRUE ~ "Swing"))
+
+```
+The outcome of the election by proportional electoral votes is below. 
+
+```{r}
+prop_statevotes%>% group_by(Winner)%>% count()
+
+prop_statevotes%>% 
+  ungroup() %>% 
+  summarize(GOP = sum(prop_elec_votes_GOP),
+            DEM = sum(prop_elec_votes_DEM))
+```
+
+
+#   Regressions on election results
+
+##    Voting turnout and democrat percent
+
+The following section focuses on testing the hypothesis surrounding the relationship between turnout and democrat votes. This process began with the construction of the data frame 'VotingTibble. This data frame contains observations from counties with the; proportion of ethnicities; the population and voting statistics.    
+
+Using this data frame a linear model was constructed between the percentage of votes that were democratic and the voting turnout of each county. This model was found to have a significant relationship between the two variables where every increase of 10% of voter turnout led to an increase of 0.04% for democrats. This was found to be statistically significant where p = 0.000289. Whilst this relationship was found to be significant, the adjusted r-square value is quite small at 0.006489. This means that a marginal amount of variance of is explained by the voting turnout of the county.   
+
+A graphical plot of this relationship was also generated below which colors observations by the proportion of votes that were democrat. It also constructs sizes of plots based off the size of the total votes cast at the county of observation. 
+
+
+
+```{r}
+VotingTibble <- training %>% select(StateName, StateFIPS, County,countyFIPS, votes_gop,votes_dem,
+                                    gopPercent,demPercent,total_votes, white,black, hispanic,TOT_POP,votingPop) %>% 
+  mutate(demPercent =100*demPercent,
+         votingPop = 100*votingPop, 
+         white = 100*white)
+
+demXturnout_lm <- lm(votingPop ~ demPercent, data = VotingTibble)
+summary(demXturnout_lm)
+
+VotingTibble %>% 
+  ggplot(aes(votingPop, demPercent, size = total_votes, color = demPercent,))+
+  geom_point()+geom_smooth(aes(votingPop, demPercent),method = lm)+
+  geom_hline(yintercept = 50) +theme(legend.position = "none")+
+  scale_color_gradient2(high = "blue", mid = "grey", low = "red", midpoint = 50)
+
+```
+
+## Democratic vote percent and white percentage of population
+In this portion the second part of the hypothesis, surrounding the ethnic distribution of voters, is tested. Here I have opted to use the variable 'white' as an inverse measure against democratic percentage of votes. This is valid under the assumption that the US populations is at a majority white nation, meaning that remaining percentages represents the ethnic minorities.For the alternative hypothesis to be true there would have to be be a statistically significant negative relationship between white voters and the share of votes for the democratic party. 
+
+Below a linear model was constructed to do just that. As predicted the relationship was highly significant where p<2e-16. Interestingly the intercept (p<2e-16) is greater than 1 meaning that an entirely non-white county should have 103.64 % of the votes democrat. Whilst this is of course impossible, it does speak to the practical significance of the result.The coefficient itself suggests that for every 1% increase in white percentage there is a 0.56% decrease in democrat percentage. The standard error of the graph increases substantially for the region left of 50% white, but maintains the upward trajectory of democrat percentage share.This model also explains alot more variance than turnout alone, with an adjusted R-squared value of 0.3237. Meaning that the variable 'white' explains 32.37% of the total variance in democratic vote percentage.   
+
+The scatter plot shows this line and colors observation points by democrat percentage. To give greater perspective it also hols the size of points in relation to the total votes cast at the county. This larger helps visually  show that democrat majorities occur in counties in larger populations.  
+
+
+
+
+```{r}
+gopXwhite_lm <- lm(white ~ demPercent, data = VotingTibble)
+
+summary(gopXwhite_lm)
+
+VotingTibble %>% ggplot(aes(white, demPercent, size  = total_votes, color = demPercent))+
+  geom_point()+geom_smooth(method = lm, color = 'black')+
+  geom_hline(yintercept = 50)+geom_vline(xintercept = 50)+theme(legend.position = "none")+
+  scale_color_gradient2(high = "blue", mid = "grey", low = "red", midpoint = 50)
+
+  
+```
+
+
+#   Predicting county level election outcome by voting turnout and ethnicity
+
+One of the important goals of this project was to use this voting information to predict the type of political battleground of each county and state. By this, I simply mean whether it is a strong win for either party or if the region is a swing county or state. This process starts with defining these categories in the training data set. Here I have considered a margin of win greater than 5% as a strong win for each party, whilst the region in between defines each observation as a swing county. This was implemented using a case_when() function.   
+
+
+
+##    Constructing categorical variable
+```{r}
+
+training <- training%>%mutate(win_type = case_when(
+           demPercent -0.5 >0.05 ~ "Strong DEM",
+           gopPercent -0.5 >0.05 ~ "Strong GOP",
+           TRUE ~ "Swing")) 
+```
+
+After this stage we move on to utilizing support vector machines to apply different models to help predict the data. Here I have tried to use four types of models: linear, polynomial, radial and sigmoid. These will attempt to predict the win category of each county based on the following variables: white percentage, black percentage, hispanic percentage, total population, voting turnout, and total votes cast. I chose these variables as they are relevant to the theory that the outcome of a county win depends on the ethnic distribution, population and voting turnout. 
+
+In these models I used the respective kernels to model the training data and then apply predictions on the selected variables aforementioned. This was then grouped by the state of the counties and used to construct the bar graphs filled in relation to the number of sucessful (TRUE) and unsuccessful (FALSE) predictions. Finally an overall success rate was produced for each model as well as a sample of the top 6 best  and worst predicted states.
+
+
+
+##    Linear SVM 
+
+```{r}
+pg_svm_linear <- training %>%
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(training$win_type), kernel='linear')
+
+pg_pred <- training %>% mutate(predicted_PG=predict(pg_svm_linear))  
+
+pg_scored <- pg_pred %>% mutate(status=(predicted_PG==win_type)) %>%
+ count(PostalCode,status)
+
+pg_scored %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+pg_scored <- pg_scored%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+pg_scored %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+linear_success<-pg_scored %>% filter((status == TRUE)) %>% group_by(PostalCode) %>% summarize(linear = n/cases) %>% arrange(-linear)
+
+head(linear_success)
+tail(linear_success)
+
+
+```
+
+##    Polynomial SVM
+
+```{r}
+pg_svm_poly <- training %>%
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(training$win_type), kernel='poly')
+
+pg_pred_poly <- training %>% mutate(predicted_PG=predict(pg_svm_poly))  
+
+pg_scored_poly <- pg_pred_poly %>% mutate(status=(predicted_PG==win_type)) %>%
+ count(PostalCode,status)
+
+pg_scored_poly %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+pg_scored_poly <- pg_scored_poly%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+pg_scored_poly %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+poly_success<-pg_scored_poly %>% filter(status == TRUE) %>% group_by(PostalCode) %>% summarize(poly = n/cases) %>% arrange(-poly)
+
+head(poly_success)
+tail(poly_success)
+
+```
+
+##    Sigmoid SVM
+
+```{r}
+pg_svm_sigmoid <- training %>%
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(training$win_type), kernel='sigmoid')
+
+pg_pred_sigmoid <- training %>% mutate(predicted_PG=predict(pg_svm_sigmoid))  
+
+pg_scored_sigmoid <- pg_pred_sigmoid %>% mutate(status=(predicted_PG==win_type)) %>%
+ count(PostalCode,status)
+
+pg_scored_sigmoid %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+pg_scored_sigmoid<- pg_scored_sigmoid%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+pg_scored_sigmoid %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+sigmoid_success<-pg_scored_sigmoid %>% filter(status == TRUE) %>% group_by(PostalCode) %>% summarize(sigmoid = n/cases) %>% arrange(-sigmoid)
+head(sigmoid_success)
+tail(sigmoid_success)
+
+```
+
+##    Radial SVM
+
+```{r}
+pg_svm_radial <- training %>%
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(training$win_type), kernel='radial')
+
+pg_pred_radial <- training %>% mutate(predicted_PG=predict(pg_svm_radial))  
+
+pg_scored_radial <- pg_pred_radial %>% mutate(status=(predicted_PG==win_type)) %>%
+ count(PostalCode,status)
+
+pg_scored_radial %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+pg_scored_radial <- pg_scored_radial%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+pg_scored_radial %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+radial_success<- pg_scored_radial %>% filter(status == TRUE) %>% group_by(PostalCode) %>% summarize(radial = n/cases) %>% arrange(-radial)
+head(radial_success)
+tail(radial_success)
+
+```
+
+
+Of all the models the best performing kernel was in fact the polynomial model with an 84.8% accuracy. This was closely followed by the radial model at 84.6%. The standard deviation for the successes in polynomial model was also smaller indicating a lower amount of variance in predicting outcomes. The sigmoid kernel performed the worst by a large margin in making predictions at 71.3% accuracy. Unsurprising the better predicted states by proportion tended to be the smaller ones with fewer counties. Montana, DC and Delaware were all frequently on these top lists. Of states with larger numbers of counties, Tennessee and Oklahoma were predicted rather accurately. The worst predicted states were interestingly mainly in New England and north east of the US. Maine, Massachusetts and Connecticut were frequently seen on these lists.  
+
+
+
+
+##    Success rate by party and total votes
+
+Here I wanted to get a visual sense of the success of predictions when grouping by state as well as electoral votes. In the chunk below I constructed a data frame that contained the most successful model 'poly'. From there I generated a scatter plot with linear models for each win type. The data points are also colored by the win type predicted. I have also constructed a linear model to assess the total relationship between the total votes of each state and the accuracy of the polynomial SVM model. 
+```{r}
+poly_statevotes <- prop_statevotes %>% 
+  left_join(poly_success, by = "PostalCode") %>% 
+  filter(!is.na(poly))
+poly_statevotes%>% ggplot(aes(totalvotes, poly, color = win_type))+
+  geom_point()+scale_color_manual(values = c("blue","red","black" ))+geom_smooth(method = lm, se =F)
+
+lm_polyXvotes <- lm(poly_statevotes$poly~poly_statevotes$totalvotes)
+summary(lm_polyXvotes)
+
+
+```
+Quantitatively there is no overall relationship between the total votes in each state and the predictive accuracy of the polynomial model. When looking at the scatterplot it can be observed that the win types cluster together at certain predictive levels. Predicting republican wins seems to be highly accurate, whereas democrat wins are much less so. Interestingly, swing states are in between the two levels.    
+
+```{r}
+training_table <- prop_statevotes %>% 
+  left_join(poly_success, by = "PostalCode") %>%
+  left_join(pg_scored_poly, by = "PostalCode") %>% filter(status == TRUE)
+
+plot_usmap(data = training_table, regions="states", values = "win_type")+scale_fill_manual(values = c("blue","red","palegreen"))
+```
+
+
+
+#   Applying polynomial model to query set
+
+Before applying the polynomial model to the test set, I ran it with the query data set to verify it's success rate. I found that it was identical in its success rate. I constructed a US Map to display the distribution of the voting outcome categories. 
+
+
+
+
+```{r}
+query <- query%>%
+  mutate(win_type = case_when(
+           demPercent -0.5 >0.05 ~ "Strong DEM",
+           gopPercent -0.5 >0.05 ~ "Strong GOP",
+           TRUE ~ "Swing")) 
+```
+
+```{r}
+query_pg_svm_poly <- query %>% 
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(query$win_type), kernel='poly')
+
+query_pg_pred_poly <- query %>% mutate(predicted_PG=predict(query_pg_svm_poly))  
+
+query_pg_scored_poly <- query_pg_pred_poly %>% mutate(status=(predicted_PG==win_type)) %>%
+ count(PostalCode,status)
+
+query_pg_scored_poly %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+query_pg_scored_poly <- query_pg_scored_poly%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+query_pg_scored_poly %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+query_poly_success<-query_pg_scored_poly %>% filter(status == TRUE) %>% group_by(PostalCode) %>% summarize(poly = n/cases) %>% arrange(-poly)
+
+```
+
+#   Testing polynomial model 
+
+In this portion I tested the model using the data set left aside called test. Interestingly the model here outperformed both the query set and training set. Here it had an average accuracy of 87.7%. 
+
+
+
+```{r}
+test <- test%>%mutate(win_type = case_when(
+           demPercent -0.5 >0.05 ~ "Strong DEM",
+           gopPercent -0.5 >0.05 ~ "Strong GOP",
+           TRUE ~ "Swing")) 
+```
+
+
+```{r}
+test_pg_svm_poly <- test %>%
+ select(white,black, hispanic,TOT_POP,votingPop,total_votes) %>%
+ svm(y=as.factor(test$win_type), kernel='poly')
+
+test_pg_pred_poly <- test %>% mutate(predicted_pg=predict(test_pg_svm_poly))  
+
+test_pg_scored_poly <- test_pg_pred_poly %>% mutate(status=(predicted_pg==win_type)) %>%
+ count(PostalCode,status)
+
+test_pg_scored_poly %>% mutate(PostalCode=reorder(PostalCode,desc(n))) %>%
+ ggplot(aes(n,PostalCode,fill=status)) +
+ geom_col()
+
+test_pg_scored_poly <- test_pg_scored_poly%>% group_by(PostalCode) %>%mutate(cases = sum(n))
+
+test_pg_scored_poly %>% group_by(status) %>% summarize(success_rate = sum(n)/sum(cases), sd = sd(n/cases))
+
+test_poly_success<-test_pg_scored_poly %>% filter(status == TRUE) %>% group_by(PostalCode) %>% summarize(poly = n/cases) %>% arrange(-poly)
+```
+
+
+
+However, from the graph produced below you can see that there are considerable differences between the US Map generated in the training data versus the map generated in the test. This may be a sampling issue which arises from the fact that more counties across the US are republican than democrat. Therefore, there is greater chance of predictive error statewide and countrywide as the sampling size decreases. This being said, there was success in the consistency of certain swing states such as Texas, North Carolina and Iowa.   
+
+
+
+
+```{r, echo = FALSE}
+statevotes2 <- test %>% 
+  group_by(StateName,PostalCode,StateFIPS) %>%
+  summarize(total_dem = sum(votes_dem),
+            total_gop = sum(votes_gop), 
+            totalvotes = sum(total_votes),
+            state_pop = sum(TOT_POP)) %>% 
+  mutate(vote_difference = total_gop-total_dem,
+         gop_prop = total_gop/totalvotes,
+         dem_prop = total_dem/totalvotes,
+         prop_difference = gop_prop-dem_prop,
+         fips = StateFIPS) %>% 
+  ungroup() %>% 
+  mutate(USpop = sum(state_pop)) %>%  
+  full_join(electoral_df, by = "StateName") %>% 
+  group_by(StateName) %>% 
+  mutate(US_prop = state_pop/USpop, 
+         elec_votes_by_pop = US_prop*sum(electoral_votes)) %>% 
+  select(StateName,fips,PostalCode, Electoral_Votes, gop_prop,dem_prop, totalvotes) %>% 
+  mutate(prop_elec_votes_GOP = Electoral_Votes*gop_prop,
+         prop_elec_votes_DEM = Electoral_Votes*dem_prop,
+         Winner = case_when(
+           (prop_elec_votes_GOP - prop_elec_votes_DEM) <0 ~ "DEM",
+           prop_elec_votes_GOP-prop_elec_votes_DEM >0 ~ "GOP"), 
+         win_type = case_when(
+           dem_prop-0.5 >0.05 ~ "Strong DEM",
+           gop_prop-0.5 >0.05 ~ "Strong GOP",
+           TRUE ~ "Swing")) 
+
+final_table <- statevotes2 %>% 
+  left_join(test_poly_success, by = "PostalCode") %>%
+  left_join(test_pg_scored_poly, by = "PostalCode") %>% filter(status == TRUE)
+
+plot_usmap(data = final_table, regions="states", values = "win_type")+scale_fill_manual(values = c("blue","red","palegreen"))
+```
+
+#   Conclusions
+
+In this project there have been a number of successes. Firstly, based on the linear regressions run there is reason to believe that there is a significant relationship between voting turnout and the percentage share of democrat votes. This is a positive relationship but is ultimately of little practical significance. From the coefficient, the increase is marginal and explains a minute level of variance. Nonetheless, I can reject the null hypothesis with extremely strong statistical significance. 
+
+In contrast, the second theory surrounding the ethnic distribution in counties proved a much better predictor of the outcome of democrat votes. Here there was a large negative relationship between the proportion of white people and democrat percent vote. By deductive reasoning this would mean that the percentage of minorities would increase with democrat votes. Therefore, I can reject my second null hypothesis with incredibly strong statistical evidence. 
+
+Finally, there was some success in predicting the win types for states and counties across the US. Using support vector machine modeling I found a polynomial model to have some moderate success in predicting the outcome. In the training phase, it scored 84.8% accuracy in predicting whether a county was a strong republican, strong democrat or a swing. In the testing phase this actually increased to 87.4% which would further verify the true predictive accuracy somewhere in the mid-80% range. As a follow on, I was able to identify that the polynomial predictive model was on average more accurate for republican observations than swing states and democrat states. This model utilized statistics on population, voting turnout and ethnic proportions solely to predict these voting outcomes.In the end this puts to practice the theory introduced earlier. From this it can now be said that the proportions of minorities, voting turnouts and populations of counties are important in predicting the success of either party in elections.   
+
+
+
+
+
+#   Sources
+
+https://www.pewresearch.org/fact-tank/2021/01/28/turnout-soared-in-2020-as-nearly-two-thirds-of-eligible-u-s-voters-cast-ballots-for-president/
+
+https://www.census.gov/library/stories/2021/04/record-high-turnout-in-2020-general-election.html
+
+https://github.com/tonmcg/US_County_Level_Election_Results_08-20 (Voting)
+
+https://usafacts.org/visualizations/coronavirus-covid-19-spread-map/ (Covid)
+
+https://www.ers.usda.gov/data-products/county-level-data-sets/download-data/ (Education, etc)
+
+https://www.census.gov/data/tables/time-series/demo/popest/2010s-counties-detail.html
+(Racial/Pop.)
+
+
